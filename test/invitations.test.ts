@@ -2,7 +2,16 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { hashToken } from '../src/auth/tokens.ts';
 import { createTestContext, type TestContext } from './helpers/context.ts';
-import { asIn, createTeam, createTestApp, tokenFromMail, type Team, type TeamUser, type TestApp } from './helpers/app.ts';
+import {
+  asIn,
+  createTeam,
+  createTestApp,
+  signupAndToken,
+  tokenFromMail,
+  type Team,
+  type TeamUser,
+  type TestApp,
+} from './helpers/app.ts';
 
 let ctx: TestContext;
 let t: TestApp;
@@ -130,4 +139,120 @@ test('sending invitations is rate limited to 20 a minute per IP', async () => {
   }
   assert.deepEqual(codes.slice(0, 20), Array(20).fill(201));
   assert.equal(codes[20], 429);
+});
+
+// --- accepting ---
+
+const accept = (token: string, bearer?: string) =>
+  t.app.inject({
+    method: 'POST',
+    url: '/invitations/accept',
+    headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+    payload: { token },
+  });
+/** The token from the latest invitation email (signing up also mails a verification link). */
+const linkFor = (email: string) =>
+  tokenFromMail(
+    mailsTo(email.toLowerCase())
+      .filter((m) => m.subject.startsWith("You're invited"))
+      .at(-1),
+  );
+
+test('someone who already has an account accepts and can use the tenant', async () => {
+  const tm = await createTeam(t);
+  const bearer = await signupAndToken(t, `existing-${tm.slug}@example.test`);
+  await invite(tm, tm.owner, `existing-${tm.slug}@example.test`);
+  const res = await accept(linkFor(`existing-${tm.slug}@example.test`), bearer);
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().tenant.slug, tm.slug);
+  assert.equal(res.json().role, 'member');
+  const projects = await t.app.inject({ url: '/api/projects', headers: { authorization: `Bearer ${bearer}`, 'x-tenant': tm.slug } });
+  assert.equal(projects.statusCode, 200);
+});
+
+test('someone new signs up from the link, accepts, and their email counts as verified', async () => {
+  const tm = await createTeam(t);
+  const email = `fresh-${tm.slug}@example.test`;
+  await invite(tm, tm.owner, email, 'admin');
+  const bearer = await signupAndToken(t, email);
+  const res = await accept(linkFor(email), bearer);
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().role, 'admin');
+  const [u] = await t.deps.central.sql`select email_verified_at from users where email = ${email}`;
+  assert.ok(u!.email_verified_at);
+});
+
+test('an invitation to a differently-cased email is accepted by the same address', async () => {
+  const tm = await createTeam(t);
+  await invite(tm, tm.owner, `Jane-${tm.slug}@Example.TEST`);
+  const bearer = await signupAndToken(t, `jane-${tm.slug}@example.test`);
+  assert.equal((await accept(linkFor(`jane-${tm.slug}@example.test`), bearer)).statusCode, 200);
+});
+
+test('used, revoked, expired and unknown links are all 400 INVITATION_INVALID', async () => {
+  const tm = await createTeam(t);
+  const email = `links-${tm.slug}@example.test`;
+  const bearer = await signupAndToken(t, email);
+  const expectInvalid = async (token: string) => {
+    const res = await accept(token, bearer);
+    assert.equal(res.statusCode, 400, res.body);
+    assert.equal(res.json().error.code, 'INVITATION_INVALID');
+  };
+
+  await invite(tm, tm.owner, email);
+  const used = linkFor(email);
+  assert.equal((await accept(used, bearer)).statusCode, 200);
+  await expectInvalid(used);
+
+  await t.deps.central.sql`delete from memberships where user_id = (select id from users where email = ${email})`;
+  t.deps.cache.memberships.clear();
+  const { id } = (await invite(tm, tm.owner, email)).json();
+  const revoked = linkFor(email);
+  await t.app.inject({ method: 'DELETE', url: `/members/invitations/${id}`, headers: asIn(tm, tm.owner) });
+  await expectInvalid(revoked);
+
+  await invite(tm, tm.owner, email);
+  const expired = linkFor(email);
+  await t.deps.central.sql`update invitations set expires_at = now() - interval '1 second' where token_hash = ${hashToken(expired)}`;
+  await expectInvalid(expired);
+
+  await expectInvalid('not-a-real-token');
+});
+
+test('the wrong account is refused and the link still works for the right one', async () => {
+  const tm = await createTeam(t);
+  const email = `right-${tm.slug}@example.test`;
+  await invite(tm, tm.owner, email);
+  const token = linkFor(email);
+  const wrong = await signupAndToken(t, `wrong-${tm.slug}@example.test`);
+  const res = await accept(token, wrong);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error.code, 'INVITATION_EMAIL_MISMATCH');
+  assert.equal((await accept(token, await signupAndToken(t, email))).statusCode, 200);
+});
+
+test('accepting when already a member keeps the existing role', async () => {
+  const tm = await createTeam(t);
+  const token = 'known-token-for-an-existing-admin';
+  await t.deps.central.sql`
+    insert into invitations (tenant_id, email, role, token_hash, expires_at)
+    select id, ${tm.admin.email}, 'member', ${hashToken(token)}, now() + interval '7 days' from tenants where slug = ${tm.slug}`;
+  const res = await accept(token, tm.admin.token);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().role, 'admin');
+});
+
+test('an invitation to a suspended tenant cannot be accepted', async () => {
+  const tm = await createTeam(t);
+  const email = `susp-${tm.slug}@example.test`;
+  await invite(tm, tm.owner, email);
+  await t.deps.central.sql`update tenants set status = 'suspended' where slug = ${tm.slug}`;
+  t.deps.cache.bySlug.clear();
+  const res = await accept(linkFor(email), await signupAndToken(t, email));
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error.code, 'TENANT_SUSPENDED');
+});
+
+test('accepting needs a signed-in user', async () => {
+  assert.equal((await accept('anything')).statusCode, 401);
 });

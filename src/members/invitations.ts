@@ -1,10 +1,11 @@
 import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { hashToken, randomToken } from '../auth/tokens.ts';
 import type { CentralDb } from '../db/central/client.ts';
-import { invitations, memberships, users, type InviteRole, type Role } from '../db/central/schema.ts';
+import { invitations, memberships, tenants, users, type InviteRole, type Role } from '../db/central/schema.ts';
 import { AppError } from '../errors.ts';
 import type { Mailer } from '../mailer/console.ts';
 import { can } from '../permissions/permissions.ts';
+import type { TenantCache } from '../tenancy/cache.ts';
 import type { Tenant } from '../tenancy/provision.ts';
 import { withTenantLock } from './lock.ts';
 import { assertCanManage, currentActorRole, forbidden } from './service.ts';
@@ -109,4 +110,63 @@ export async function revokeInvitation(central: CentralDb, tenantId: string, id:
       .returning({ id: invitations.id }),
   );
   if (revoked.length === 0) throw new AppError('NOT_FOUND', 404, 'No open invitation with that id in this tenant');
+}
+
+export interface AcceptedInvitation {
+  tenant: { id: string; slug: string; name: string };
+  role: Role;
+}
+
+const invalid = () => new AppError('INVITATION_INVALID', 400, 'This invitation link is invalid, used, revoked or expired');
+
+/**
+ * Accepts an invitation for the signed-in user. The token must be usable and the user's email
+ * must be the invited one. Because the link reached their inbox, their email counts as verified.
+ */
+export async function acceptInvitation(
+  deps: { central: CentralDb; cache: TenantCache },
+  input: { token: string; user: { id: string; email: string } },
+): Promise<AcceptedInvitation> {
+  const tokenHash = hashToken(input.token);
+  const [found] = await deps.central.db
+    .select({ tenantId: invitations.tenantId })
+    .from(invitations)
+    .where(and(eq(invitations.tokenHash, tokenHash), usable()));
+  if (!found) throw invalid();
+
+  const accepted = await withTenantLock(deps.central, found.tenantId, async (tx) => {
+    // Read again under the lock: a parallel accept or revoke may have just used it.
+    const [inv] = await tx
+      .select({ id: invitations.id, email: invitations.email, role: invitations.role })
+      .from(invitations)
+      .where(and(eq(invitations.tokenHash, tokenHash), usable()));
+    if (!inv) throw invalid();
+    if (inv.email !== input.user.email.toLowerCase()) {
+      throw new AppError('INVITATION_EMAIL_MISMATCH', 403, 'This invitation was sent to a different email address');
+    }
+
+    const [tenant] = await tx
+      .select({ id: tenants.id, slug: tenants.slug, name: tenants.name, status: tenants.status })
+      .from(tenants)
+      .where(eq(tenants.id, found.tenantId));
+    if (tenant!.status === 'suspended') throw new AppError('TENANT_SUSPENDED', 403, 'This tenant is suspended');
+    if (tenant!.status !== 'active') throw new AppError('TENANT_NOT_READY', 403, 'This tenant is still being set up');
+
+    const [existing] = await tx
+      .select({ role: memberships.role })
+      .from(memberships)
+      .where(and(eq(memberships.tenantId, tenant!.id), eq(memberships.userId, input.user.id)));
+    const role = existing?.role ?? inv.role;
+    if (!existing) await tx.insert(memberships).values({ tenantId: tenant!.id, userId: input.user.id, role });
+
+    await tx.update(invitations).set({ acceptedAt: sql`now()` }).where(eq(invitations.id, inv.id));
+    await tx
+      .update(users)
+      .set({ emailVerifiedAt: sql`now()` })
+      .where(and(eq(users.id, input.user.id), isNull(users.emailVerifiedAt)));
+    return { tenant: { id: tenant!.id, slug: tenant!.slug, name: tenant!.name }, role };
+  });
+
+  deps.cache.memberships.delete(`${accepted.tenant.id}:${input.user.id}`);
+  return accepted;
 }

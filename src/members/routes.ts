@@ -8,7 +8,13 @@ import { INVITE_ROLES, ROLES } from '../db/central/schema.ts';
 import type { Mailer } from '../mailer/console.ts';
 import { requirePermission } from '../permissions/guard.ts';
 import type { TenantCache } from '../tenancy/cache.ts';
-import { createInvitation, listInvitations, revokeInvitation, type Invitation } from './invitations.ts';
+import {
+  acceptInvitation,
+  createInvitation,
+  listInvitations,
+  revokeInvitation,
+  type Invitation,
+} from './invitations.ts';
 import { changeRole, listMembers, removeMember, type Member } from './service.ts';
 
 export interface MemberRouteDeps {
@@ -128,6 +134,29 @@ export async function registerMemberRoutes(app: FastifyInstance, deps: MemberRou
       await revokeInvitation(deps.central, req.tenant!.id, req.params.id);
       reply.status(204);
       return null;
+    },
+  );
+
+  // Not a tenant route: the invitation itself says which tenant it is for.
+  r.post(
+    '/invitations/accept',
+    {
+      preHandler: [deps.requireAuth],
+      schema: {
+        tags: ['members'],
+        security: [{ bearerAuth: [] }],
+        body: z.object({ token: z.string().min(1).max(200) }),
+        response: {
+          200: z.object({
+            tenant: z.object({ id: z.uuid(), slug: z.string(), name: z.string() }),
+            role: z.enum(ROLES),
+          }),
+        },
+      },
+    },
+    async (req) => {
+      const user = currentUser(req);
+      return acceptInvitation(deps, { token: req.body.token, user: { id: user.id, email: user.email } });
     },
   );
 }
