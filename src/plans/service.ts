@@ -63,6 +63,15 @@ export interface PlanSummary {
 }
 
 /**
+ * The tenant's plan as stored now. Limit checks use this instead of `req.tenant.plan`, which
+ * can be up to a minute old on an instance that didn't make the change.
+ */
+export async function currentPlan(central: CentralDb, tenantId: string): Promise<PlanId> {
+  const [row] = await central.db.select({ plan: tenants.plan }).from(tenants).where(eq(tenants.id, tenantId));
+  return row!.plan;
+}
+
+/**
  * Moves a tenant to `plan`. This is the one function a billing integration would call after a
  * payment. Downgrading never deletes anything: limits only block adding more.
  */

@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { currentUser } from '../auth/guard.ts';
 import { AppError } from '../errors.ts';
 import { requirePermission } from '../permissions/guard.ts';
+import type { CentralDb } from '../db/central/client.ts';
 import { requireFeature } from '../plans/guard.ts';
+import { currentPlan } from '../plans/service.ts';
 import { tenantDb } from '../tenancy/resolve.ts';
 import { toCsv } from './csv.ts';
 import { createProject, deleteProject, listProjects, type Project } from './service.ts';
@@ -19,6 +21,7 @@ const toJson = (p: Project) => ({ ...p, createdAt: p.createdAt.toISOString() });
 export async function registerExampleRoutes(
   app: FastifyInstance,
   guards: { requireAuth: preHandlerAsyncHookHandler; requireTenant: preHandlerAsyncHookHandler },
+  central: CentralDb,
 ): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
   const base = [guards.requireAuth, guards.requireTenant];
@@ -80,7 +83,7 @@ export async function registerExampleRoutes(
       const project = await createProject(
         tenantDb(req),
         { name: req.body.name, createdBy: currentUser(req).id },
-        { plan: req.tenant!.plan },
+        { plan: await currentPlan(central, req.tenant!.id) },
       );
       reply.status(201);
       return toJson(project);
