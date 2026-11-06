@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { PLAN_IDS, type PlanId } from '../../plans/plans.ts';
 
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 
@@ -24,10 +25,14 @@ export const tenants = pgTable(
     statusError: text('status_error'),
     dbHost: text('db_host').notNull(),
     dbName: text('db_name').notNull().unique(),
+    plan: text('plan').$type<PlanId>().notNull().default('free'),
     createdAt: createdAt(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [check('tenants_status_check', sql`${t.status} in ('provisioning', 'active', 'suspended', 'failed')`)],
+  (t) => [
+    check('tenants_status_check', sql`${t.status} in ('provisioning', 'active', 'suspended', 'failed')`),
+    check('tenants_plan_check', sql.raw(`plan in (${PLAN_IDS.map((p) => `'${p}'`).join(', ')})`)),
+  ],
 );
 
 export const ROLES = ['owner', 'admin', 'member'] as const;

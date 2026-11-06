@@ -7,6 +7,7 @@ import { memberships, tenants, type TenantStatus } from '../db/central/schema.ts
 import { migrate } from '../db/migrator.ts';
 import { TENANT_MIGRATIONS_DIR } from '../db/tenant/client.ts';
 import { AppError } from '../errors.ts';
+import type { PlanId } from '../plans/plans.ts';
 import type { TenantCache } from './cache.ts';
 import { tenantDbName, validateSlug } from './slug.ts';
 
@@ -18,6 +19,7 @@ export interface Tenant {
   statusError: string | null;
   dbHost: string;
   dbName: string;
+  plan: PlanId;
 }
 
 export interface ProvisionDeps {
@@ -39,6 +41,7 @@ const tenantColumns = {
   statusError: tenants.statusError,
   dbHost: tenants.dbHost,
   dbName: tenants.dbName,
+  plan: tenants.plan,
 };
 
 function pgCode(err: unknown): string | undefined {
@@ -118,6 +121,7 @@ export async function provisionTenant(
     statusError: null,
     dbHost: deps.config.tenantDb.host,
     dbName: tenantDbName(id),
+    plan: 'free',
   };
 
   try {

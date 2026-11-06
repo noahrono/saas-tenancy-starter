@@ -15,6 +15,13 @@
       "when": 1793996450589,
       "tag": "0001_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793997081017,
+      "tag": "0002_tenant_plan",
+      "breakpoints": true
     }
   ]
 }
