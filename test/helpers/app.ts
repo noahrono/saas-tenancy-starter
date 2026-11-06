@@ -102,8 +102,11 @@ export interface Team {
 
 let teams = 0;
 
-/** A fresh tenant with one owner, one admin and one member, each with an access token. */
-export async function createTeam(t: TestApp): Promise<Team> {
+/**
+ * A fresh tenant with one owner, one admin and one member, each with an access token.
+ * Free tenants are full at 3 members, so tests that invite people pass `plan: 'business'`.
+ */
+export async function createTeam(t: TestApp, opts: { plan?: 'free' | 'pro' | 'business' } = {}): Promise<Team> {
   const n = ++teams;
   const slug = `team-${n}`;
   const user = async (who: string, token: string): Promise<TeamUser> => {
@@ -115,6 +118,10 @@ export async function createTeam(t: TestApp): Promise<Team> {
   await createTenant(t, owner.token, slug);
   const admin = await user('admin', await addMember(t, slug, `admin-${n}@example.test`, 'admin'));
   const member = await user('member', await addMember(t, slug, `member-${n}@example.test`, 'member'));
+  if (opts.plan) {
+    await t.deps.central.sql`update tenants set plan = ${opts.plan} where slug = ${slug}`;
+    t.deps.cache.bySlug.delete(slug);
+  }
   return { slug, owner, admin, member };
 }
 
