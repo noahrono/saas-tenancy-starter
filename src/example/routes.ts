@@ -77,7 +77,11 @@ export async function registerExampleRoutes(
       },
     },
     async (req, reply) => {
-      const project = await createProject(tenantDb(req), { name: req.body.name, createdBy: currentUser(req).id });
+      const project = await createProject(
+        tenantDb(req),
+        { name: req.body.name, createdBy: currentUser(req).id },
+        { plan: req.tenant!.plan },
+      );
       reply.status(201);
       return toJson(project);
     },

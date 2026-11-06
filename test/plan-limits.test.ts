@@ -115,3 +115,35 @@ test('plan usage counts open invitations as members', async () => {
   const res = await t.app.inject({ url: '/tenant/plan', headers: asIn(tm, tm.owner) });
   assert.equal(res.json().usage.members, 2);
 });
+
+// --- projects ---
+
+const createProject = (tm: Team, name: string) =>
+  t.app.inject({ method: 'POST', url: '/api/projects', headers: asIn(tm, tm.owner), payload: { name } });
+async function withProjects(tm: Team, count: number): Promise<void> {
+  for (let i = 0; i < count; i++) assert.equal((await createProject(tm, `p${i}`)).statusCode, 201);
+}
+
+test('free allows 10 projects; the 11th is refused', async () => {
+  const tm = await solo();
+  await withProjects(tm, 9);
+  assert.equal((await createProject(tm, 'tenth')).statusCode, 201);
+  const eleventh = await createProject(tm, 'eleventh');
+  assert.equal(eleventh.statusCode, 403);
+  assert.equal(eleventh.json().error.code, 'PLAN_LIMIT_REACHED');
+  assert.deepEqual(eleventh.json().error.details, { limit: 'projects', max: 10, plan: 'free' });
+});
+
+test('two projects racing for the last slot: exactly one is created', async () => {
+  const tm = await solo();
+  await withProjects(tm, 9);
+  const codes = (await Promise.all([createProject(tm, 'x'), createProject(tm, 'y')])).map((r) => r.statusCode);
+  assert.deepEqual(codes.sort(), [201, 403]);
+  const list = await t.app.inject({ url: '/api/projects', headers: asIn(tm, tm.owner) });
+  assert.equal(list.json().length, 10);
+});
+
+test('business has no project limit', async () => {
+  const tm = await createTeam(t, { plan: 'business' });
+  await withProjects(tm, 11);
+});
