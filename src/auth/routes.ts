@@ -18,7 +18,9 @@ export interface AuthRouteDeps {
   mailer: Mailer;
 }
 
-const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
+/** How every email address the API accepts is validated and normalised. */
+export const emailSchema = z.string().trim().toLowerCase().pipe(z.email().max(254));
+const email = emailSchema;
 const password = z.string().min(10).max(128);
 const credentials = z.object({ email, password });
 const userOut = z.object({ id: z.uuid(), email: z.string() });

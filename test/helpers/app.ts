@@ -87,3 +87,36 @@ export async function signupAndToken(t: TestApp, email: string, password = 'corr
   if (res.statusCode !== 201) throw new Error(`signup failed: ${res.body}`);
   return res.json().accessToken as string;
 }
+
+export interface TeamUser {
+  token: string;
+  id: string;
+  email: string;
+}
+export interface Team {
+  slug: string;
+  owner: TeamUser;
+  admin: TeamUser;
+  member: TeamUser;
+}
+
+let teams = 0;
+
+/** A fresh tenant with one owner, one admin and one member, each with an access token. */
+export async function createTeam(t: TestApp): Promise<Team> {
+  const n = ++teams;
+  const slug = `team-${n}`;
+  const user = async (who: string, token: string): Promise<TeamUser> => {
+    const email = `${who}-${n}@example.test`;
+    const [row] = await t.deps.central.sql<{ id: string }[]>`select id from users where email = ${email}`;
+    return { token, id: row!.id, email };
+  };
+  const owner = await user('owner', await signupAndToken(t, `owner-${n}@example.test`));
+  await createTenant(t, owner.token, slug);
+  const admin = await user('admin', await addMember(t, slug, `admin-${n}@example.test`, 'admin'));
+  const member = await user('member', await addMember(t, slug, `member-${n}@example.test`, 'member'));
+  return { slug, owner, admin, member };
+}
+
+/** Headers for a request as `who` inside `team`'s tenant. */
+export const asIn = (team: Team, who: TeamUser) => ({ authorization: `Bearer ${who.token}`, 'x-tenant': team.slug });
