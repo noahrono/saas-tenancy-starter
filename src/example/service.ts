@@ -1,4 +1,4 @@
-import { desc } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { TenantDb } from '../db/tenant/client.ts';
 import { projects } from '../db/tenant/schema.ts';
 
@@ -12,4 +12,10 @@ export function listProjects(db: TenantDb): Promise<Project[]> {
 export async function createProject(db: TenantDb, input: { name: string; createdBy: string }): Promise<Project> {
   const [row] = await db.insert(projects).values(input).returning();
   return row!;
+}
+
+/** Returns false when there was no such project. */
+export async function deleteProject(db: TenantDb, id: string): Promise<boolean> {
+  const rows = await db.delete(projects).where(eq(projects.id, id)).returning({ id: projects.id });
+  return rows.length > 0;
 }
