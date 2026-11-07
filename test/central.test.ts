@@ -40,6 +40,21 @@ test('memberships are unique per user and tenant, and status and role are constr
   await assert.rejects(() => central.sql`update memberships set role = 'superuser' where user_id = ${u!.id}`);
 });
 
+test('one open invitation per email per tenant, and nobody is invited as owner', async () => {
+  const [t] = await central.sql`
+    insert into tenants (slug, name, status, db_host, db_name) values ('tenant-a', 'Tenant A', 'active', 'h', 't_1') returning id`;
+  const invite = (hash: string, role = 'member') => central.sql`
+    insert into invitations (tenant_id, email, role, token_hash, expires_at)
+    values (${t!.id}, 'new@example.test', ${role}, ${hash}, now() + interval '7 days') returning id`;
+  const pgCode = async (p: Promise<unknown>) => (await p.then(() => null, (e: { code?: string }) => e)) as { code?: string } | null;
+
+  const [first] = await invite('h1');
+  assert.equal((await pgCode(invite('h2')))?.code, '23505');
+  await central.sql`update invitations set revoked_at = now() where id = ${first!.id}`;
+  await invite('h3');
+  assert.equal((await pgCode(invite('h4', 'owner')))?.code, '23514');
+});
+
 test('GET /ready reports the central database', async () => {
   const app = await buildApp({ config: ctx.config, central });
   assert.equal((await app.inject('/ready')).statusCode, 200);

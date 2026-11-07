@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 
@@ -86,4 +86,36 @@ export const emailTokens = pgTable(
     createdAt: createdAt(),
   },
   (t) => [check('email_tokens_purpose_check', sql`${t.purpose} in ('verify_email', 'reset_password')`)],
+);
+
+/** Roles an invitation can grant. Nobody is invited straight in as owner. */
+export const INVITE_ROLES = ['admin', 'member'] as const;
+export type InviteRole = (typeof INVITE_ROLES)[number];
+
+/**
+ * An emailed invitation to join a tenant. Open = neither accepted nor revoked; usable = open
+ * and not expired. Only one open invitation per email per tenant: re-inviting revokes the old one.
+ */
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    role: text('role').$type<InviteRole>().notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check('invitations_role_check', sql`${t.role} in ('admin', 'member')`),
+    uniqueIndex('invitations_open_idx')
+      .on(t.tenantId, t.email)
+      .where(sql`${t.acceptedAt} is null and ${t.revokedAt} is null`),
+  ],
 );

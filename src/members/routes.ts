@@ -3,17 +3,39 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { currentUser } from '../auth/guard.ts';
 import type { CentralDb } from '../db/central/client.ts';
-import { ROLES } from '../db/central/schema.ts';
+import { emailSchema } from '../auth/routes.ts';
+import { INVITE_ROLES, ROLES } from '../db/central/schema.ts';
+import type { Mailer } from '../mailer/console.ts';
 import { requirePermission } from '../permissions/guard.ts';
 import type { TenantCache } from '../tenancy/cache.ts';
+import {
+  acceptInvitation,
+  createInvitation,
+  listInvitations,
+  revokeInvitation,
+  type Invitation,
+} from './invitations.ts';
 import { changeRole, listMembers, removeMember, type Member } from './service.ts';
 
 export interface MemberRouteDeps {
   central: CentralDb;
   cache: TenantCache;
+  mailer: Mailer;
+  config: { baseDomain: string };
   requireAuth: preHandlerAsyncHookHandler;
   requireTenant: preHandlerAsyncHookHandler;
 }
+
+const invitationOut = z.object({
+  id: z.uuid(),
+  email: z.string(),
+  role: z.enum(INVITE_ROLES),
+  invitedBy: z.uuid().nullable(),
+  expiresAt: z.string(),
+});
+const invitationJson = (i: Invitation) => ({ ...i, expiresAt: i.expiresAt.toISOString() });
+/** Every invitation sends an email, so sending is limited per IP. */
+const INVITE_RATE_LIMIT = { max: 20, timeWindow: '1 minute' };
 
 const memberOut = z.object({ userId: z.uuid(), email: z.string(), role: z.enum(ROLES), joinedAt: z.string() });
 const toJson = (m: Member) => ({ ...m, joinedAt: m.joinedAt.toISOString() });
@@ -66,6 +88,75 @@ export async function registerMemberRoutes(app: FastifyInstance, deps: MemberRou
       await removeMember(deps.central, deps.cache, { ...context(req), targetUserId: req.params.userId });
       reply.status(204);
       return null;
+    },
+  );
+
+  r.post(
+    '/members/invitations',
+    {
+      preHandler: [...base, requirePermission('members:invite')],
+      config: { rateLimit: INVITE_RATE_LIMIT },
+      schema: {
+        ...doc,
+        body: z.object({ email: emailSchema, role: z.enum(INVITE_ROLES) }),
+        response: { 201: invitationOut },
+      },
+    },
+    async (req, reply) => {
+      const user = currentUser(req);
+      const invitation = await createInvitation(deps, {
+        tenant: req.tenant!,
+        actor: { userId: user.id, email: user.email, role: req.membership!.role },
+        email: req.body.email,
+        role: req.body.role,
+      });
+      reply.status(201);
+      return invitationJson(invitation);
+    },
+  );
+
+  r.get(
+    '/members/invitations',
+    {
+      preHandler: [...base, requirePermission('members:invite')],
+      schema: { ...doc, response: { 200: z.array(invitationOut) } },
+    },
+    async (req) => (await listInvitations(deps.central, req.tenant!.id)).map(invitationJson),
+  );
+
+  r.delete(
+    '/members/invitations/:id',
+    {
+      preHandler: [...base, requirePermission('members:invite')],
+      schema: { ...doc, params: z.object({ id: z.uuid() }), response: { 204: z.null() } },
+    },
+    async (req, reply) => {
+      await revokeInvitation(deps.central, req.tenant!.id, req.params.id);
+      reply.status(204);
+      return null;
+    },
+  );
+
+  // Not a tenant route: the invitation itself says which tenant it is for.
+  r.post(
+    '/invitations/accept',
+    {
+      preHandler: [deps.requireAuth],
+      schema: {
+        tags: ['members'],
+        security: [{ bearerAuth: [] }],
+        body: z.object({ token: z.string().min(1).max(200) }),
+        response: {
+          200: z.object({
+            tenant: z.object({ id: z.uuid(), slug: z.string(), name: z.string() }),
+            role: z.enum(ROLES),
+          }),
+        },
+      },
+    },
+    async (req) => {
+      const user = currentUser(req);
+      return acceptInvitation(deps, { token: req.body.token, user: { id: user.id, email: user.email } });
     },
   );
 }

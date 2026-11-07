@@ -1,7 +1,14 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestContext, type TestContext } from './helpers/context.ts';
-import { addMember, createTenant, createTestApp, signupAndToken, type TestApp } from './helpers/app.ts';
+import {
+  createTeam,
+  createTestApp,
+  signupAndToken,
+  type Team,
+  type TeamUser as Who,
+  type TestApp,
+} from './helpers/app.ts';
 
 let ctx: TestContext;
 let t: TestApp;
@@ -15,36 +22,9 @@ after(async () => {
   await ctx.cleanup();
 });
 
-interface Who {
-  token: string;
-  id: string;
-}
-interface Team {
-  slug: string;
-  owner: Who;
-  admin: Who;
-  member: Who;
-}
-
-let n = 0;
 const userId = async (email: string) =>
   (await t.deps.central.sql<{ id: string }[]>`select id from users where email = ${email}`)[0]!.id;
-
-/** A fresh tenant with one owner, one admin and one member. */
-async function team(): Promise<Team> {
-  const slug = `team-${++n}`;
-  const ownerEmail = `owner-${n}@example.test`;
-  const ownerToken = await signupAndToken(t, ownerEmail);
-  await createTenant(t, ownerToken, slug);
-  const adminToken = await addMember(t, slug, `admin-${n}@example.test`, 'admin');
-  const memberToken = await addMember(t, slug, `member-${n}@example.test`, 'member');
-  return {
-    slug,
-    owner: { token: ownerToken, id: await userId(ownerEmail) },
-    admin: { token: adminToken, id: await userId(`admin-${n}@example.test`) },
-    member: { token: memberToken, id: await userId(`member-${n}@example.test`) },
-  };
-}
+const team = () => createTeam(t);
 
 const h = (tm: Team, who: Who) => ({ authorization: `Bearer ${who.token}`, 'x-tenant': tm.slug });
 const patch = (tm: Team, as: Who, target: string, role: string) =>
@@ -156,7 +136,9 @@ test('a demoted admin loses admin rights straight away', async () => {
 
 test('changing or removing someone who is not a member is 404 NOT_FOUND', async () => {
   const tm = await team();
-  const stranger = await userId((await signupAndToken(t, `stranger-${n}@example.test`), `stranger-${n}@example.test`));
+  const email = `stranger-${tm.slug}@example.test`;
+  await signupAndToken(t, email);
+  const stranger = await userId(email);
   for (const res of [await patch(tm, tm.owner, stranger, 'member'), await remove(tm, tm.owner, stranger)]) {
     assert.equal(res.statusCode, 404);
     assert.equal(res.json().error.code, 'NOT_FOUND');

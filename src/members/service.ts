@@ -18,7 +18,7 @@ interface Actor {
   role: Role;
 }
 
-const forbidden = (permission?: Permission) =>
+export const forbidden = (permission?: Permission) =>
   new AppError('FORBIDDEN', 403, 'Your role does not allow this', permission ? { permission } : undefined);
 const notAMember = () => new AppError('NOT_FOUND', 404, 'That person is not a member of this tenant');
 
@@ -69,7 +69,7 @@ async function ownerCount(tx: CentralTx, tenantId: string): Promise<number> {
  * The caller's role as it is now, read under the lock. The role on the request can be up to
  * 30 seconds old (membership cache), and a decision about owners must not rest on that.
  */
-async function currentActorRole(tx: CentralTx, tenantId: string, actor: Actor): Promise<Role> {
+export async function currentActorRole(tx: CentralTx, tenantId: string, actor: Actor): Promise<Role> {
   const me = await findMember(tx, tenantId, actor.userId);
   if (!me) throw new AppError('TENANT_NOT_FOUND', 404, 'Tenant not found');
   return me.role;

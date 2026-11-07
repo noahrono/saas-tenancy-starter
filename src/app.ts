@@ -83,7 +83,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     if (deps.pools) {
       const requireTenant = makeRequireTenant({ central, pools: deps.pools, cache, config: deps.config });
       await registerExampleRoutes(app, { requireAuth, requireTenant });
-      await registerMemberRoutes(app, { central, cache, requireAuth, requireTenant });
+      await registerMemberRoutes(app, { central, cache, mailer, config: deps.config, requireAuth, requireTenant });
     }
   }
 
