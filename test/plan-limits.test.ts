@@ -147,3 +147,14 @@ test('business has no project limit', async () => {
   const tm = await createTeam(t, { plan: 'business' });
   await withProjects(tm, 11);
 });
+
+test('the project limit uses the plan as stored now, not a cached copy', async () => {
+  const tm = await solo();
+  await withProjects(tm, 10);
+  // Another instance upgrades the plan: the database changes, this instance's cache doesn't.
+  await t.deps.central.sql`update tenants set plan = 'pro' where slug = ${tm.slug}`;
+  assert.equal((await createProject(tm, 'after upgrade')).statusCode, 201);
+  // And a downgrade elsewhere is enforced here straight away.
+  await t.deps.central.sql`update tenants set plan = 'free' where slug = ${tm.slug}`;
+  assert.equal((await createProject(tm, 'after downgrade')).statusCode, 403);
+});
