@@ -38,7 +38,7 @@ const invite = (tm: Team, as: TeamUser, email: string, role = 'member', remoteAd
 const mailsTo = (email: string) => t.mails.filter((m) => m.to === email);
 
 test('an owner invites someone by email: the token is mailed, never returned', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const res = await invite(tm, tm.owner, 'new-1@example.test');
   assert.equal(res.statusCode, 201, res.body);
   const body = res.json();
@@ -57,7 +57,7 @@ test('an owner invites someone by email: the token is mailed, never returned', a
 });
 
 test('admins may invite admins; nobody may invite an owner; members may not invite', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   assert.equal((await invite(tm, tm.admin, 'new-2@example.test', 'admin')).statusCode, 201);
   const owner = await invite(tm, tm.owner, 'new-3@example.test', 'owner');
   assert.equal(owner.statusCode, 400);
@@ -68,14 +68,14 @@ test('admins may invite admins; nobody may invite an owner; members may not invi
 });
 
 test('inviting someone who is already a member is 409 ALREADY_MEMBER', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const res = await invite(tm, tm.owner, tm.member.email.toUpperCase());
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().error.code, 'ALREADY_MEMBER');
 });
 
 test('re-inviting the same email replaces the old link', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   await invite(tm, tm.owner, 'again@example.test');
   const firstToken = tokenFromMail(mailsTo('again@example.test').at(-1));
   assert.equal((await invite(tm, tm.owner, 'again@example.test', 'admin')).statusCode, 201);
@@ -89,7 +89,7 @@ test('re-inviting the same email replaces the old link', async () => {
 });
 
 test('listing shows usable invitations only, newest first, and members may not list', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   await invite(tm, tm.owner, 'one@example.test');
   await invite(tm, tm.owner, 'two@example.test');
   await invite(tm, tm.owner, 'expired@example.test');
@@ -105,7 +105,7 @@ test('listing shows usable invitations only, newest first, and members may not l
 });
 
 test('revoking an invitation removes it; revoking again is 404', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const { id } = (await invite(tm, tm.owner, 'revoke@example.test')).json();
   const del = () => t.app.inject({ method: 'DELETE', url: `/members/invitations/${id}`, headers: asIn(tm, tm.owner) });
   assert.equal((await del()).statusCode, 204);
@@ -117,8 +117,8 @@ test('revoking an invitation removes it; revoking again is 404', async () => {
 });
 
 test("an invitation can't be revoked from another tenant", async () => {
-  const a = await createTeam(t);
-  const b = await createTeam(t);
+  const a = await createTeam(t, { plan: 'business' });
+  const b = await createTeam(t, { plan: 'business' });
   // a's owner also owns b, so the request passes b's guards.
   await t.deps.central.sql`
     insert into memberships (user_id, tenant_id, role)
@@ -132,7 +132,7 @@ test("an invitation can't be revoked from another tenant", async () => {
 });
 
 test('sending invitations is rate limited to 20 a minute per IP', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const codes: number[] = [];
   for (let i = 0; i < 21; i++) {
     codes.push((await invite(tm, tm.owner, `bulk-${i}@example.test`, 'member', '10.78.0.1')).statusCode);
@@ -159,7 +159,7 @@ const linkFor = (email: string) =>
   );
 
 test('someone who already has an account accepts and can use the tenant', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const bearer = await signupAndToken(t, `existing-${tm.slug}@example.test`);
   await invite(tm, tm.owner, `existing-${tm.slug}@example.test`);
   const res = await accept(linkFor(`existing-${tm.slug}@example.test`), bearer);
@@ -171,7 +171,7 @@ test('someone who already has an account accepts and can use the tenant', async 
 });
 
 test('someone new signs up from the link, accepts, and their email counts as verified', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const email = `fresh-${tm.slug}@example.test`;
   await invite(tm, tm.owner, email, 'admin');
   const bearer = await signupAndToken(t, email);
@@ -183,14 +183,14 @@ test('someone new signs up from the link, accepts, and their email counts as ver
 });
 
 test('an invitation to a differently-cased email is accepted by the same address', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   await invite(tm, tm.owner, `Jane-${tm.slug}@Example.TEST`);
   const bearer = await signupAndToken(t, `jane-${tm.slug}@example.test`);
   assert.equal((await accept(linkFor(`jane-${tm.slug}@example.test`), bearer)).statusCode, 200);
 });
 
 test('used, revoked, expired and unknown links are all 400 INVITATION_INVALID', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const email = `links-${tm.slug}@example.test`;
   const bearer = await signupAndToken(t, email);
   const expectInvalid = async (token: string) => {
@@ -220,7 +220,7 @@ test('used, revoked, expired and unknown links are all 400 INVITATION_INVALID', 
 });
 
 test('the wrong account is refused and the link still works for the right one', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const email = `right-${tm.slug}@example.test`;
   await invite(tm, tm.owner, email);
   const token = linkFor(email);
@@ -232,7 +232,7 @@ test('the wrong account is refused and the link still works for the right one', 
 });
 
 test('accepting when already a member keeps the existing role', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const token = 'known-token-for-an-existing-admin';
   await t.deps.central.sql`
     insert into invitations (tenant_id, email, role, token_hash, expires_at)
@@ -243,7 +243,7 @@ test('accepting when already a member keeps the existing role', async () => {
 });
 
 test('an invitation to a suspended tenant cannot be accepted', async () => {
-  const tm = await createTeam(t);
+  const tm = await createTeam(t, { plan: 'business' });
   const email = `susp-${tm.slug}@example.test`;
   await invite(tm, tm.owner, email);
   await t.deps.central.sql`update tenants set status = 'suspended' where slug = ${tm.slug}`;

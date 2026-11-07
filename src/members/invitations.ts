@@ -5,6 +5,7 @@ import { invitations, memberships, tenants, users, type InviteRole, type Role } 
 import { AppError } from '../errors.ts';
 import type { Mailer } from '../mailer/console.ts';
 import { can } from '../permissions/permissions.ts';
+import { assertWithinLimit, lockedPlan, memberUsage } from '../plans/service.ts';
 import type { TenantCache } from '../tenancy/cache.ts';
 import type { Tenant } from '../tenancy/provision.ts';
 import { withTenantLock } from './lock.ts';
@@ -60,6 +61,9 @@ export async function createInvitation(
       .innerJoin(users, eq(users.id, memberships.userId))
       .where(and(eq(memberships.tenantId, tenant.id), eq(users.email, email)));
     if (existing) throw new AppError('ALREADY_MEMBER', 409, `${email} is already a member of this tenant`);
+
+    const seatsAfter = (await memberUsage(tx, tenant.id, { excludeEmail: email })) + 1;
+    assertWithinLimit(await lockedPlan(tx, tenant.id), 'members', seatsAfter);
 
     await tx
       .update(invitations)
@@ -157,7 +161,12 @@ export async function acceptInvitation(
       .from(memberships)
       .where(and(eq(memberships.tenantId, tenant!.id), eq(memberships.userId, input.user.id)));
     const role = existing?.role ?? inv.role;
-    if (!existing) await tx.insert(memberships).values({ tenantId: tenant!.id, userId: input.user.id, role });
+    if (!existing) {
+      // A downgrade since the invitation was sent may have left no seat for it.
+      const seatsAfter = (await memberUsage(tx, tenant!.id, { excludeInvitationId: inv.id })) + 1;
+      assertWithinLimit(await lockedPlan(tx, tenant!.id), 'members', seatsAfter);
+      await tx.insert(memberships).values({ tenantId: tenant!.id, userId: input.user.id, role });
+    }
 
     await tx.update(invitations).set({ acceptedAt: sql`now()` }).where(eq(invitations.id, inv.id));
     await tx
