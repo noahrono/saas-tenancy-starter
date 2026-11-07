@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.ts';
 import { createDeps, type RuntimeDeps } from '../../src/deps.ts';
+import type { Role } from '../../src/db/central/schema.ts';
 import type { Mailer, MailMessage } from '../../src/mailer/console.ts';
 import type { TestContext } from './context.ts';
 
@@ -43,6 +44,25 @@ export function refreshCookie(res: { cookies: { name: string; value: string }[] 
   const c = res.cookies.find((x) => x.name === 'rt');
   if (!c) throw new Error('no rt cookie set');
   return c.value;
+}
+
+export async function createTenant(t: TestApp, token: string, slug: string): Promise<void> {
+  const res = await t.app.inject({
+    method: 'POST',
+    url: '/tenants',
+    headers: { authorization: `Bearer ${token}` },
+    payload: { slug, name: slug },
+  });
+  if (res.statusCode !== 201) throw new Error(`create tenant failed: ${res.body}`);
+}
+
+/** Signs up `email` and makes them a `role` member of `slug` directly in the database. Returns their access token. */
+export async function addMember(t: TestApp, slug: string, email: string, role: Role): Promise<string> {
+  const token = await signupAndToken(t, email);
+  await t.deps.central.sql`
+    insert into memberships (user_id, tenant_id, role)
+    select u.id, tn.id, ${role} from users u, tenants tn where u.email = ${email} and tn.slug = ${slug}`;
+  return token;
 }
 
 export async function signupAndToken(t: TestApp, email: string, password = 'correct-horse-9'): Promise<string> {

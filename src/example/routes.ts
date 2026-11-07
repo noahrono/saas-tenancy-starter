@@ -2,28 +2,30 @@ import type { FastifyInstance, preHandlerAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { currentUser } from '../auth/guard.ts';
+import { AppError } from '../errors.ts';
+import { requirePermission } from '../permissions/guard.ts';
 import { tenantDb } from '../tenancy/resolve.ts';
-import { createProject, listProjects, type Project } from './service.ts';
+import { createProject, deleteProject, listProjects, type Project } from './service.ts';
 
 const projectOut = z.object({ id: z.uuid(), name: z.string(), createdBy: z.uuid(), createdAt: z.string() });
 const toJson = (p: Project) => ({ ...p, createdAt: p.createdAt.toISOString() });
 
 /**
- * The pattern to copy for any tenant-scoped resource: guard with requireAuth then
- * requireTenant, and only ever touch data through `tenantDb(req)`.
+ * The pattern to copy for any tenant-scoped resource: guard with requireAuth, requireTenant
+ * and the permission the route needs, and only ever touch data through `tenantDb(req)`.
  */
 export async function registerExampleRoutes(
   app: FastifyInstance,
   guards: { requireAuth: preHandlerAsyncHookHandler; requireTenant: preHandlerAsyncHookHandler },
 ): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
-  const preHandler = [guards.requireAuth, guards.requireTenant];
+  const base = [guards.requireAuth, guards.requireTenant];
   const tenantHeader = z.object({ 'x-tenant': z.string().optional() });
 
   r.get(
     '/api/projects',
     {
-      preHandler,
+      preHandler: [...base, requirePermission('projects:read')],
       schema: {
         tags: ['projects'],
         security: [{ bearerAuth: [] }],
@@ -37,7 +39,7 @@ export async function registerExampleRoutes(
   r.post(
     '/api/projects',
     {
-      preHandler,
+      preHandler: [...base, requirePermission('projects:create')],
       schema: {
         tags: ['projects'],
         security: [{ bearerAuth: [] }],
@@ -50,6 +52,27 @@ export async function registerExampleRoutes(
       const project = await createProject(tenantDb(req), { name: req.body.name, createdBy: currentUser(req).id });
       reply.status(201);
       return toJson(project);
+    },
+  );
+
+  r.delete(
+    '/api/projects/:id',
+    {
+      preHandler: [...base, requirePermission('projects:delete')],
+      schema: {
+        tags: ['projects'],
+        security: [{ bearerAuth: [] }],
+        headers: tenantHeader,
+        params: z.object({ id: z.uuid() }),
+        response: { 204: z.null() },
+      },
+    },
+    async (req, reply) => {
+      if (!(await deleteProject(tenantDb(req), req.params.id))) {
+        throw new AppError('NOT_FOUND', 404, 'Project not found');
+      }
+      reply.status(204);
+      return null;
     },
   );
 }
