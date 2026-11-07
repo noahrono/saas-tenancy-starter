@@ -18,6 +18,7 @@ import { makeRequireTenant } from './tenancy/resolve.ts';
 import { registerTenantRoutes } from './tenants/routes.ts';
 import { registerExampleRoutes } from './example/routes.ts';
 import { registerMemberRoutes } from './members/routes.ts';
+import { registerPlanRoutes } from './plans/routes.ts';
 
 export interface AppDeps {
   config: Config;
@@ -84,6 +85,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       const requireTenant = makeRequireTenant({ central, pools: deps.pools, cache, config: deps.config });
       await registerExampleRoutes(app, { requireAuth, requireTenant });
       await registerMemberRoutes(app, { central, cache, mailer, config: deps.config, requireAuth, requireTenant });
+      await registerPlanRoutes(app, { central, cache, requireAuth, requireTenant });
     }
   }
 

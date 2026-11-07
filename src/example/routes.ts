@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { currentUser } from '../auth/guard.ts';
 import { AppError } from '../errors.ts';
 import { requirePermission } from '../permissions/guard.ts';
+import { requireFeature } from '../plans/guard.ts';
 import { tenantDb } from '../tenancy/resolve.ts';
+import { toCsv } from './csv.ts';
 import { createProject, deleteProject, listProjects, type Project } from './service.ts';
 
 const projectOut = z.object({ id: z.uuid(), name: z.string(), createdBy: z.uuid(), createdAt: z.string() });
@@ -34,6 +36,32 @@ export async function registerExampleRoutes(
       },
     },
     async (req) => (await listProjects(tenantDb(req))).map(toJson),
+  );
+
+  // A plan-gated feature: the pattern for anything only some plans include.
+  r.get(
+    '/api/projects/export',
+    {
+      preHandler: [...base, requirePermission('projects:read'), requireFeature('projects:export')],
+      schema: {
+        tags: ['projects'],
+        security: [{ bearerAuth: [] }],
+        headers: tenantHeader,
+        description: 'Download every project as CSV. Needs a plan with the projects:export feature.',
+      },
+    },
+    async (req, reply) => {
+      const rows = (await listProjects(tenantDb(req))).map((p) => [
+        p.id,
+        p.name,
+        p.createdBy,
+        p.createdAt.toISOString(),
+      ]);
+      reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', 'attachment; filename="projects.csv"');
+      return toCsv([['id', 'name', 'createdBy', 'createdAt'], ...rows]);
+    },
   );
 
   r.post(
