@@ -46,9 +46,21 @@ export function refreshCookie(res: { cookies: { name: string; value: string }[] 
   return c.value;
 }
 
+let clients = 0;
+/**
+ * A different client address for each setup request, so per-IP rate limits on signup and
+ * tenant creation don't trip in test files that need many users or tenants. Tests that
+ * check those limits make their own requests and keep the default address.
+ */
+const freshClient = () => {
+  clients++;
+  return `10.99.${Math.floor(clients / 250)}.${(clients % 250) + 1}`;
+};
+
 export async function createTenant(t: TestApp, token: string, slug: string): Promise<void> {
   const res = await t.app.inject({
     method: 'POST',
+    remoteAddress: freshClient(),
     url: '/tenants',
     headers: { authorization: `Bearer ${token}` },
     payload: { slug, name: slug },
@@ -66,7 +78,12 @@ export async function addMember(t: TestApp, slug: string, email: string, role: R
 }
 
 export async function signupAndToken(t: TestApp, email: string, password = 'correct-horse-9'): Promise<string> {
-  const res = await t.app.inject({ method: 'POST', url: '/auth/signup', payload: { email, password } });
+  const res = await t.app.inject({
+    method: 'POST',
+    remoteAddress: freshClient(),
+    url: '/auth/signup',
+    payload: { email, password },
+  });
   if (res.statusCode !== 201) throw new Error(`signup failed: ${res.body}`);
   return res.json().accessToken as string;
 }
